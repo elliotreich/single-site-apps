@@ -12,7 +12,7 @@ Built 2026-06-14. Apple Silicon, macOS 26.5, Swift 6.3.
 | Dir | Installed as | Wraps | Notes |
 |---|---|---|---|
 | `Spectrum/` | `/Applications/Spectrum.app` | `watch.spectrum.net/livetv` | Works great. Logged in, persists. ~52 MB RAM idle, ~177 MB streaming (vs Brave ~944 MB). HW-decoded. |
-| `AppleTV/`  | `/Applications/Apple TV Web.app` | `tv.apple.com` | For watching mom's Apple TV+ via her Apple ID in-app. See caveats below. |
+| `AppleTV/`  | `/Applications/Apple TV Web.app` | `tv.apple.com` | Example: wrap `tv.apple.com` for a secondary Apple ID / family member — useful when the Mac's system iCloud is the wrong account. See caveats below. |
 
 > The **YouTube** app is a separate, much larger native project at
 > `~/syncthing-shared/dev/youtube/` (not a wrapper — full SwiftUI + yt-dlp + AVPlayer).
@@ -56,8 +56,8 @@ hardware-secure high tier.
   If still blank: prime suspect is the `forIdentifier` data store on macOS 26;
   fallback = switch to a persistent store at a custom path (keeps login) or
   `.default()` (loses per-app isolation but paints reliably).
-- **Login**: sign in with mom's Apple ID + the 2FA code sent to HER trusted
-  device. Don't auto-fill credentials — it's not Elliot's account.
+- **Login**: sign in with that Apple ID + the 2FA code sent to its trusted
+  device. Don't auto-fill credentials for an account that isn't yours.
 
 ## Logout fix (2026-06-28)
 
@@ -92,6 +92,25 @@ account. So tv.apple.com's "Open in Apple TV" links go to the wrong place. Fix:
   it. Install: open Tampermonkey → Create new script → paste the file →
   save. (We use our own button rather than hijacking Apple's banner, which is
   conditional/shadow-DOM and brittle.)
+
+## Tests
+
+No automated tests — verification is per-app manual + `swiftc` compile check:
+
+```bash
+./build.sh Spectrum "Spectrum"   # must exit 0 and appear in /Applications
+./build.sh AppleTV  "Apple TV Web"
+# then launch each app and check login persists after quit/relaunch
+```
+
+Logic is intentionally minimal (single `main.swift` per site) — future tests could exercise URL routing or data-store isolation.
+
+## Maintenance
+
+- **Add a site:** copy a dir, edit `kHomeURL` + bundle id/name in `main.swift` and `Info.plist`, `genicon.sh` if you want a new icon, then `./build.sh <Dir> "<Name>"`.
+- **Icons:** `genicon.sh` converts `icon_1024.png` → `AppIcon.icns`.
+- **Data store:** login state lives at `~/Library/WebKit/<bundle-id>/` (or `~/Library/WebKit/` for `.default()` stores). To reset login, delete that folder and re-login.
+- **macOS updates:** WebKit data-store behavior changed on macOS 26 (`forIdentifier:` vs `.default()`); see "Logout fix" note above.
 
 ## Adding a new site
 
