@@ -13,6 +13,7 @@ Built 2026-06-14. Apple Silicon, macOS 26.5, Swift 6.3.
 |---|---|---|---|
 | `Spectrum/` | `/Applications/Spectrum.app` | `watch.spectrum.net/livetv` | Works great. Logged in, persists. ~52 MB RAM idle, ~177 MB streaming (vs Brave ~944 MB). HW-decoded. |
 | `AppleTV/`  | `/Applications/Apple TV Web.app` | `tv.apple.com` | For watching mom's Apple TV+ via her Apple ID in-app. See caveats below. |
+| `QwenCoder/` | `/Applications/Qwen Coder.app` | `coder.qwen.ai` | Qwen Coder desktop wrapper with persistent WebKit login and `qwencoderweb://` deep links. |
 
 > The **YouTube** app is a separate, much larger native project at
 > `~/syncthing-shared/dev/youtube/` (not a wrapper — full SwiftUI + yt-dlp + AVPlayer).
@@ -22,6 +23,7 @@ Built 2026-06-14. Apple Silicon, macOS 26.5, Swift 6.3.
 ```bash
 ./build.sh Spectrum "Spectrum"
 ./build.sh AppleTV  "Apple TV Web"
+./build.sh QwenCoder "Qwen Coder"
 ```
 Compiles, bundles, ad-hoc code-signs (required for WKWebView networking +
 FairPlay on modern macOS), and registers with LaunchServices.
@@ -30,6 +32,7 @@ FairPlay on modern macOS), and registers with LaunchServices.
 
 - **WKWebView + real Safari user-agent** so the site serves its standard player.
 - **Code-signing is mandatory** — unsigned, WebKit networking/DRM silently fails.
+- **Qwen Coder**: the site accepts Safari 16+; this wrapper sends a Safari 18 user-agent so the full coding workspace loads instead of Qwen's compatibility/download screen.
 - **Persistent login**: a named on-disk `WKWebsiteDataStore(forIdentifier:)`
   (macOS 14+) so cookies/2FA-trusted sessions survive relaunches. Data lives at
   `~/Library/WebKit/<bundle-id>/`.
