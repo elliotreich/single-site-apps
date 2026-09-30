@@ -1,6 +1,9 @@
 import Cocoa
 import WebKit
 
+// Shared process pool so main and login windows share cookies/storage
+let sharedPool = WKProcessPool()
+
 // F1TVPlayer — a minimal single-site browser for https://f1tv.formula1.com.
 // Efficient WebKit shell (lighter than Chromium) with persistent login.
 // Features: cookie archive, session keepalive, separate login window,
@@ -52,7 +55,7 @@ func saveCookieArchive(_ cookies: [HTTPCookie]) {
     try? data.write(to: url, options: .atomic)
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, NSWindowDelegate, WKHTTPCookieStoreObserver {
     var window: NSWindow!
     var webView: WKWebView!
     var pendingURL: URL?
@@ -89,6 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         }
     }
 
+    /// Clear stale Akamai bot token that would force re-login
+    func clearStaleReeseIfNeeded() {
+        let js = "(function(){ try { const raw=localStorage.getItem('reese84'); if(!raw) return; const data=JSON.parse(raw); if(data.renewTime && Date.now() > data.renewTime + (data.renewInSec||778)*1000) { console.log('F1TV clearing stale reese84'); localStorage.removeItem('reese84'); } } catch(e){} })();";
+        webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
     /// Log cookies for debugging.
     func logCookies(_ label: String = "") {
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
@@ -106,6 +115,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     // ─── Cookie persistence ───────────────────────────────────────────────
+
+    func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
+        persistCookies()
+    }
 
     /// Save cookies to disk.
     func persistCookies() {
@@ -144,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
             return
         }
         let config = WKWebViewConfiguration()
+        config.processPool = sharedPool
         let store = WKWebsiteDataStore.default()
         // Disable ITP for login window too (keeps cross-domain auth cookies alive)
         let sel = NSSelectorFromString("_setResourceLoadStatisticsEnabled:")
@@ -180,7 +194,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config = WKWebViewConfiguration()
+        config.processPool = sharedPool
         let store = WKWebsiteDataStore.default()
+        store.httpCookieStore.add(self)
 
         // Disable ITP for persistent cross-domain auth cookies
         let sel = NSSelectorFromString("_setResourceLoadStatisticsEnabled:")
@@ -243,6 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
                 self.window.displayIfNeeded()
             }
             logCookies()
+            clearStaleReeseIfNeeded()
             injectKeepalive()
             persistCookies()
         } else if webView == loginWebView {

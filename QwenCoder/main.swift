@@ -21,6 +21,9 @@ let kUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 let kCookieArchivePath: String = {
     let dir = NSHomeDirectory() + "/Library/Application Support/com.elliot.qwencoderplayer"
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    // The archive contains authentication cookies; keep both the directory
+    // and the file private to this macOS user.
+    try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
     return dir + "/Cookies.plist"
 }()
 
@@ -36,23 +39,81 @@ func resolveDeepLink(_ url: URL) -> URL? {
     return URL(string: full)
 }
 
+/// Convert a cookie to a property-list-safe record. HTTPCookie itself does
+/// not adopt NSSecureCoding on current macOS, so archiving HTTPCookie objects
+/// directly is not a reliable cold-launch format.
+func cookieRecord(from cookie: HTTPCookie) -> [String: Any] {
+    var record: [String: Any] = [
+        "name": cookie.name,
+        "value": cookie.value,
+        "domain": cookie.domain,
+        "path": cookie.path,
+        "version": cookie.version,
+        "secure": cookie.isSecure,
+        "httpOnly": cookie.isHTTPOnly,
+        "sessionOnly": cookie.isSessionOnly
+    ]
+    if let expires = cookie.expiresDate {
+        record["expires"] = expires.timeIntervalSince1970
+    }
+    if let sameSite = cookie.sameSitePolicy {
+        record["sameSitePolicy"] = sameSite
+    }
+    return record
+}
+
+/// Rebuild a cookie from a persisted record.
+func cookie(from record: [String: Any]) -> HTTPCookie? {
+    guard let name = record["name"] as? String,
+          let value = record["value"] as? String,
+          let domain = record["domain"] as? String,
+          let path = record["path"] as? String
+    else { return nil }
+
+    var properties: [HTTPCookiePropertyKey: Any] = [
+        .name: name,
+        .value: value,
+        .domain: domain,
+        .path: path,
+        .version: record["version"] as? Int ?? 0,
+        .secure: (record["secure"] as? Bool ?? false) ? "TRUE" : "FALSE"
+    ]
+    if let timestamp = record["expires"] as? Double {
+        properties[.expires] = Date(timeIntervalSince1970: timestamp)
+    }
+    if record["httpOnly"] as? Bool == true {
+        properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE"
+    }
+    if let sameSite = record["sameSitePolicy"] as? String {
+        properties[.sameSitePolicy] = sameSite
+    }
+    return HTTPCookie(properties: properties)
+}
+
 /// Read saved cookies from disk.
 func loadCookieArchive() -> [HTTPCookie]? {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: kCookieArchivePath)),
-          let cookies = try? NSKeyedUnarchiver.unarchivedObject(
-            ofClasses: [NSArray.self, HTTPCookie.self], from: data) as? [HTTPCookie],
-          !cookies.isEmpty
+          let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+          let payload = plist as? [String: Any],
+          let rawRecords = payload["cookies"] as? [Any]
     else { return nil }
-    return cookies
+    let cookies = rawRecords.compactMap { $0 as? [String: Any] }.compactMap(cookie(from:))
+    return cookies.isEmpty ? nil : cookies
 }
 
 /// Persist cookies to disk.
 func saveCookieArchive(_ cookies: [HTTPCookie]) {
     let url = URL(fileURLWithPath: kCookieArchivePath)
-    guard let data = try? NSKeyedArchiver.archivedData(withRootObject: cookies,
-                                                       requiringSecureCoding: false)
+    let payload: [String: Any] = [
+        "version": 2,
+        "cookies": cookies.map { cookieRecord(from: $0) }
+    ]
+    guard let data = try? PropertyListSerialization.data(fromPropertyList: payload,
+                                                         format: .binary,
+                                                         options: 0)
     else { return }
     try? data.write(to: url, options: .atomic)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, NSWindowDelegate, WKHTTPCookieStoreObserver {
@@ -204,6 +265,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         }
     }
 
+    /// Keep the auxiliary window alive and take it off-screen. On macOS 26,
+    /// closing a WebKit-backed window can race AppKit's transform animation
+    /// teardown and crash in `NSWindowTransformAnimation.dealloc`.
+    func hideLoginWindow() {
+        loginWindow?.orderOut(nil)
+    }
+
     // ─── App lifecycle ────────────────────────────────────────────────────
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -297,9 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
                             print("QwenCoder login: cookies injected into main webview, reloading")
                             self.webView.load(URLRequest(url: kHomeURL))
                         }
-                        self.loginWindow?.close()
-                        self.loginWindow = nil
-                        self.loginWebView = nil
+                        self.hideLoginWindow()
                     }
                 }
             }
@@ -328,8 +394,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
             return false
         }
         if sender == loginWindow {
-            loginWindow = nil
-            loginWebView = nil
+            hideLoginWindow()
+            return false
         }
         return true
     }

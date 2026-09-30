@@ -1,6 +1,9 @@
 import Cocoa
 import WebKit
 
+// Shared process pool so main and login windows share cookies/storage
+let sharedPool = WKProcessPool()
+
 // AppleTVPlayer — a minimal single-site browser for tv.apple.com.
 // Efficient WebKit shell (lighter than Chromium) that stays logged into an Apple ID.
 // NOTE: browser playback of Apple TV+ is quality-capped vs the native TV app; this
@@ -66,7 +69,7 @@ func saveCookieArchive(_ cookies: [HTTPCookie]) {
     try? data.write(to: url, options: .atomic)
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, NSWindowDelegate, WKHTTPCookieStoreObserver {
     var window: NSWindow!
     var webView: WKWebView!
     // A deep link can arrive before the webView exists (cold launch). Buffer it and
@@ -109,6 +112,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     /// Log cookies for debugging session persistence.
+    func clearStaleReeseIfNeeded() {
+        let js = "(function(){ try { const raw=localStorage.getItem('reese84'); if(!raw) return; const data=JSON.parse(raw); if(data.renewTime && Date.now() > data.renewTime + (data.renewInSec||778)*1000) { console.log('clearing stale reese84'); localStorage.removeItem('reese84'); } } catch(e){} })();";
+        webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
     func logCookies(_ label: String = "") {
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
             let relevant = cookies.filter { $0.domain.contains("apple.com") || $0.domain.contains("tv.apple") }
@@ -125,6 +133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     // ─── Cookie persistence helpers ────────────────────────────────────────
 
     /// Save all apple-domain cookies from the main webview to disk.
+    func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
+        persistCookies()
+    }
+
     func persistCookies() {
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
             let relevant = cookies.filter { $0.domain.contains("apple.com") || $0.domain.contains("tv.apple") }
@@ -295,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
             }
             // Session persistence
             logCookies()
+            clearStaleReeseIfNeeded()
             injectKeepalive()
             persistCookies()
         } else if webView == loginWebView {
